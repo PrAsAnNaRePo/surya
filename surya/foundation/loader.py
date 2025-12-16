@@ -71,6 +71,40 @@ class FoundationModelLoader(ModelLoader):
         ).to(device)
         model = model.eval()
 
+        # Apply quantization if enabled for CPU inference speedup
+        if settings.FOUNDATION_MODEL_QUANTIZE and device == "cpu":
+            logger.info(
+                f"Applying dynamic quantization to foundation model for CPU optimization"
+            )
+            try:
+                # Set quantization backend engine
+                # 'qnnpack' is optimized for ARM/Apple Silicon
+                # 'fbgemm' is for x86 CPUs
+                import platform
+                if platform.machine() in ['arm64', 'aarch64']:
+                    torch.backends.quantized.engine = 'qnnpack'
+                else:
+                    torch.backends.quantized.engine = 'fbgemm'
+
+                logger.info(f"Using quantization engine: {torch.backends.quantized.engine}")
+
+                # Convert model to float32 before quantization
+                # Dynamic quantization requires float32 models
+                logger.info(f"Converting model from {model.dtype} to float32 for quantization")
+                model = model.to(torch.float32)
+
+                # Dynamic quantization for CPU - quantizes Linear layers
+                # This reduces model size and increases inference speed on CPU
+                model = torch.quantization.quantize_dynamic(
+                    model,
+                    {torch.nn.Linear},  # Quantize all Linear layers
+                    dtype=torch.qint8    # Use 8-bit integer quantization
+                )
+                logger.info("Foundation model quantization completed")
+            except Exception as e:
+                logger.warning(f"Quantization failed: {e}. Continuing with non-quantized model.")
+                # Continue without quantization if it fails
+
         if settings.COMPILE_ALL or settings.COMPILE_FOUNDATION:
             torch._dynamo.config.cache_size_limit = 1000
             torch._dynamo.config.suppress_errors = True
